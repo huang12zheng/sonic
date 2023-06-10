@@ -1,165 +1,225 @@
-// Sonic
-//
-// Fast, lightweight and schema-less search backend
-// Copyright: 2019, Valerian Saliou <valerian@valeriansaliou.name>
-// License: Mozilla Public License v2.0 (MPL v2.0)
+// // Sonic
+// //
+// // Fast, lightweight and schema-less search backend
+// // Copyright: 2019, Valerian Saliou <valerian@valeriansaliou.name>
+// // License: Mozilla Public License v2.0 (MPL v2.0)
 
-#![cfg_attr(feature = "benchmark", feature(test))]
-#![deny(unstable_features, unused_imports, unused_qualifications, clippy::all)]
+// #![cfg_attr(feature = "benchmark", feature(test))]
+// #![deny(unstable_features, unused_imports, unused_qualifications, clippy::all)]
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate serde_derive;
+// #[macro_use]
+// extern crate log;
+// #[macro_use]
+// extern crate lazy_static;
+// #[macro_use]
+// extern crate serde_derive;
 
-mod channel;
-mod config;
-mod executor;
-mod lexer;
-mod query;
-mod stopwords;
-mod store;
-mod tasker;
+// mod channel;
+// mod config;
+// mod executor;
+// mod lexer;
+// mod query;
+// mod stopwords;
+// mod store;
+// mod tasker;
 
-use std::ops::Deref;
-use std::str::FromStr;
-use std::thread;
-use std::time::Duration;
+// use std::ops::Deref;
+// use std::str::FromStr;
+// use std::thread;
+// use std::time::Duration;
 
-use clap::{App, Arg};
-use log::LevelFilter;
+// use clap::{App, Arg};
+// use log::LevelFilter;
 
-use channel::listen::{ChannelListen, ChannelListenBuilder};
-use channel::statistics::ensure_states as ensure_states_channel_statistics;
-use config::logger::ConfigLogger;
-use config::options::Config;
-use config::reader::ConfigReader;
-use store::fst::StoreFSTPool;
-use store::kv::StoreKVPool;
-use tasker::runtime::TaskerBuilder;
-use tasker::shutdown::ShutdownSignal;
+// use channel::listen::{ChannelListen, ChannelListenBuilder};
+// use channel::statistics::ensure_states as ensure_states_channel_statistics;
+// use config::logger::ConfigLogger;
+// use config::options::Config;
+// use config::reader::ConfigReader;
+// use store::fst::StoreFSTPool;
+// use store::kv::StoreKVPool;
+// use tasker::runtime::TaskerBuilder;
+// use tasker::shutdown::ShutdownSignal;
 
-struct AppArgs {
-    config: String,
-}
+// struct AppArgs {
+//     config: String,
+// }
 
-#[cfg(unix)]
-#[cfg(feature = "allocator-jemalloc")]
-#[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+// #[cfg(unix)]
+// #[cfg(feature = "allocator-jemalloc")]
+// #[global_allocator]
+// static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-pub static LINE_FEED: &str = "\r\n";
+// pub static LINE_FEED: &str = "\r\n";
 
-pub static THREAD_NAME_CHANNEL_MASTER: &str = "sonic-channel-master";
-pub static THREAD_NAME_CHANNEL_CLIENT: &str = "sonic-channel-client";
-pub static THREAD_NAME_TASKER: &str = "sonic-tasker";
+// pub static THREAD_NAME_CHANNEL_MASTER: &str = "sonic-channel-master";
+// pub static THREAD_NAME_CHANNEL_CLIENT: &str = "sonic-channel-client";
+// pub static THREAD_NAME_TASKER: &str = "sonic-tasker";
 
-macro_rules! gen_spawn_managed {
-    ($name:expr, $method:ident, $thread_name:ident, $managed_fn:ident) => {
-        fn $method() {
-            debug!("spawn managed thread: {}", $name);
+// macro_rules! gen_spawn_managed {
+//     ($name:expr, $method:ident, $thread_name:ident, $managed_fn:ident) => {
+//         fn $method() {
+//             debug!("spawn managed thread: {}", $name);
 
-            let worker = thread::Builder::new()
-                .name($thread_name.to_string())
-                .spawn(|| $managed_fn::build().run());
+//             let worker = thread::Builder::new()
+//                 .name($thread_name.to_string())
+//                 .spawn(|| $managed_fn::build().run());
 
-            // Block on worker thread (join it)
-            let has_error = if let Ok(worker_thread) = worker {
-                worker_thread.join().is_err()
-            } else {
-                true
-            };
+//             // Block on worker thread (join it)
+//             let has_error = if let Ok(worker_thread) = worker {
+//                 worker_thread.join().is_err()
+//             } else {
+//                 true
+//             };
 
-            // Worker thread crashed?
-            if has_error == true {
-                error!("managed thread crashed ({}), setting it up again", $name);
+//             // Worker thread crashed?
+//             if has_error == true {
+//                 error!("managed thread crashed ({}), setting it up again", $name);
 
-                // Prevents thread start loop floods
-                thread::sleep(Duration::from_secs(1));
+//                 // Prevents thread start loop floods
+//                 thread::sleep(Duration::from_secs(1));
 
-                $method();
-            }
-        }
-    };
-}
+//                 $method();
+//             }
+//         }
+//     };
+// }
 
-lazy_static! {
-    static ref APP_ARGS: AppArgs = make_app_args();
-    static ref APP_CONF: Config = ConfigReader::make();
-}
+// lazy_static! {
+//     static ref APP_ARGS: AppArgs = make_app_args();
+//     static ref APP_CONF: Config = ConfigReader::make();
+// }
 
-gen_spawn_managed!(
-    "channel",
-    spawn_channel,
-    THREAD_NAME_CHANNEL_MASTER,
-    ChannelListenBuilder
-);
-gen_spawn_managed!("tasker", spawn_tasker, THREAD_NAME_TASKER, TaskerBuilder);
+// gen_spawn_managed!(
+//     "channel",
+//     spawn_channel,
+//     THREAD_NAME_CHANNEL_MASTER,
+//     ChannelListenBuilder
+// );
+// gen_spawn_managed!("tasker", spawn_tasker, THREAD_NAME_TASKER, TaskerBuilder);
 
-fn make_app_args() -> AppArgs {
-    let matches = App::new(clap::crate_name!())
-        .version(clap::crate_version!())
-        .author(clap::crate_authors!())
-        .about(clap::crate_description!())
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .help("Path to configuration file")
-                .default_value("./config.cfg")
-                .takes_value(true),
-        )
-        .get_matches();
+// fn make_app_args() -> AppArgs {
+//     let matches = App::new(clap::crate_name!())
+//         .version(clap::crate_version!())
+//         .author(clap::crate_authors!())
+//         .about(clap::crate_description!())
+//         .arg(
+//             Arg::new("config")
+//                 .short('c')
+//                 .long("config")
+//                 .help("Path to configuration file")
+//                 .default_value("./config.cfg")
+//                 .takes_value(true),
+//         )
+//         .get_matches();
 
-    // Generate owned app arguments
-    AppArgs {
-        config: String::from(matches.value_of("config").expect("invalid config value")),
-    }
-}
+//     // Generate owned app arguments
+//     AppArgs {
+//         config: String::from(matches.value_of("config").expect("invalid config value")),
+//     }
+// }
 
-fn ensure_states() {
-    // Ensure all statics are valid (a `deref` is enough to lazily initialize them)
-    let (_, _) = (APP_ARGS.deref(), APP_CONF.deref());
+// fn ensure_states() {
+//     // Ensure all statics are valid (a `deref` is enough to lazily initialize them)
+//     let (_, _) = (APP_ARGS.deref(), APP_CONF.deref());
 
-    // Ensure per-module states
-    ensure_states_channel_statistics();
-}
+//     // Ensure per-module states
+//     // ensure_states_channel_statistics();
+// }
 
+// fn main() {
+//     let _logger = ConfigLogger::init(
+//         LevelFilter::from_str(&APP_CONF.server.log_level).expect("invalid log level"),
+//     );
+
+//     let shutdown_signal = ShutdownSignal::new();
+
+//     info!("starting up");
+
+//     // Ensure all states are bound
+//     ensure_states();
+
+//     // Spawn tasker (background thread)
+//     thread::spawn(spawn_tasker);
+
+//     // Spawn channel (foreground thread)
+//     thread::spawn(spawn_channel);
+
+//     info!("started");
+
+//     shutdown_signal.at_exit(move |signal| {
+//         info!("stopping gracefully (got signal: {})", signal);
+
+//         // Teardown Sonic Channel
+//         ChannelListen::teardown();
+
+//         // Perform a KV flush (ensures all in-memory changes are synced on-disk before shutdown)
+//         StoreKVPool::flush(true);
+
+//         // Perform a FST consolidation (ensures all in-memory items are synced on-disk before \
+//         //   shutdown; otherwise we would lose all non-consolidated FST changes)
+//         StoreFSTPool::consolidate(true);
+
+use core::time;
+use std::thread::sleep;
+
+//         info!("stopped");
+//     });
+// }
+use sonic_server::*;
 fn main() {
-    let _logger = ConfigLogger::init(
-        LevelFilter::from_str(&APP_CONF.server.log_level).expect("invalid log level"),
-    );
+    let (_, _) = (APP_ARGS.deref(), APP_CONF.deref());
+    // let worker = thread::Builder::new()
+    //     .name(THREAD_NAME_TASKER.to_string())
+    //     .spawn(|| TaskerBuilder::build().run());
+    let computation = thread::spawn(|| loop {
+        let id = rand::random::<u8>();
+        // ChannelMessage::on(
+        //     format!(
+        //         "PUSH messages default users:{} \"users{} like me. 黄政\"",
+        //         id, id
+        //     )
+        //     .as_str(),
+        // )
+        // .unwrap()
+        // .iter()
+        // .for_each(|e| println!("{:?}", e.to_args()));
+        // StoreKVPool::flush(true);
+        // StoreFSTPool::consolidate(true);
 
-    let shutdown_signal = ShutdownSignal::new();
-
-    info!("starting up");
-
-    // Ensure all states are bound
-    ensure_states();
-
-    // Spawn tasker (background thread)
-    thread::spawn(spawn_tasker);
-
-    // Spawn channel (foreground thread)
-    thread::spawn(spawn_channel);
-
-    info!("started");
-
-    shutdown_signal.at_exit(move |signal| {
-        info!("stopping gracefully (got signal: {})", signal);
-
-        // Teardown Sonic Channel
-        ChannelListen::teardown();
-
-        // Perform a KV flush (ensures all in-memory changes are synced on-disk before shutdown)
-        StoreKVPool::flush(true);
-
-        // Perform a FST consolidation (ensures all in-memory items are synced on-disk before \
-        //   shutdown; otherwise we would lose all non-consolidated FST changes)
-        StoreFSTPool::consolidate(true);
-
-        info!("stopped");
+        // ChannelMessage::on("List messages default")
+        ChannelMessage::on("QUERY messages default \"use\"  LIMIT(10)")
+            .unwrap()
+            .iter()
+            .for_each(|e| println!("{:?}", e.to_args()));
+        sleep(time::Duration::from_secs(5));
     });
+
+    // if let Ok(worker_thread) = worker {
+    //     worker_thread.join().is_err()
+    // } else {
+    //     true
+    // };
+
+    ChannelMessage::on("PUSH messages default users \"users 123456\"")
+        .unwrap()
+        .iter()
+        .for_each(|e| println!("{:?}", e.to_args()));
+    // ChannelMessage::on("PUSH messages default users \"users 123456789\"")
+    //     .unwrap()
+    //     .iter()
+    //     .for_each(|e| println!("{:?}", e.to_args()));
+    // ChannelMessage::on("PUSH messages default users \"users12 123456789\"")
+    //     .unwrap()
+    //     .iter()
+    //     .for_each(|e| println!("{:?}", e.to_args()));
+    // ChannelMessage::on("SUGGEST messages default \"黄政\"")
+    //     .unwrap()
+    //     .iter()
+    //     .for_each(|e| println!("{:?}", e.to_args()));
+    // ChannelMessage::on("QUERY default default users");
+    println!("runing");
+
+    let result = computation.join().unwrap();
+    // println!("{result}");
 }

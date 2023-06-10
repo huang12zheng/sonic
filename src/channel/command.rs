@@ -23,7 +23,7 @@ use crate::store::kv::StoreKVPool;
 use crate::store::operation::StoreOperationDispatch;
 use crate::APP_CONF;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ChannelCommandError {
     UnknownCommand,
     NotFound,
